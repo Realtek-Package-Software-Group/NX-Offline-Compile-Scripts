@@ -129,6 +129,29 @@ if ( -x "$python_prefix/bin/conda-unpack" && ! -e "$python_prefix/.conda_unpacke
   touch "$python_prefix/.conda_unpacked"
 endif
 
+set py_bin = "$python_prefix/bin/python3.14"
+if ( ! -x "$py_bin" ) then
+  set py_bin = "$python_prefix/bin/python3"
+endif
+if ( ! -x "$py_bin" ) then
+  set py_bin = "$python_prefix/bin/python"
+endif
+if ( ! -x "$py_bin" ) then
+  echo "No python executable found under: $python_prefix/bin"
+  exit 1
+endif
+
+if ( ! -e "$python_prefix/bin/pip3" && -x "$python_prefix/bin/pip3.14" ) then
+  ln -sfn "pip3.14" "$python_prefix/bin/pip3"
+endif
+if ( ! -e "$python_prefix/bin/pip" ) then
+  if ( -x "$python_prefix/bin/pip3" ) then
+    ln -sfn "pip3" "$python_prefix/bin/pip"
+  else if ( -x "$python_prefix/bin/pip3.14" ) then
+    ln -sfn "pip3.14" "$python_prefix/bin/pip"
+  endif
+endif
+
 set patchelf_bin = ""
 if ( -x "$llvm_prefix/bin/patchelf" ) then
   set patchelf_bin = "$llvm_prefix/bin/patchelf"
@@ -145,6 +168,17 @@ if ( "$patchelf_bin" != "" ) then
   endif
 else
   echo "Warning: patchelf not found; venv activation may need start_python_only.csh beforehand."
+endif
+
+set repair_script = "$script_dir_abs/repair_python_sysconfig.py"
+set build_metadata = "$script_dir_abs/python-build-metadata.txt"
+if ( -f "$repair_script" && -f "$build_metadata" ) then
+  "$py_bin" "$repair_script" --python-prefix "$python_prefix" --llvm-prefix "$llvm_prefix" --metadata-file "$build_metadata"
+  if ( $status != 0 ) then
+    exit $status
+  endif
+else
+  echo "Warning: missing repair_python_sysconfig.py or python-build-metadata.txt; relocated extension/AOT builds may require start_llvm_python.csh."
 endif
 
 foreach launcher (start_llvm_only.csh start_python_only.csh start_llvm_python.csh)

@@ -100,10 +100,22 @@ setenv PORTABLE_ENV_MODE "python"
 if ( $?PORTABLE_LLVM_PREFIX ) unsetenv PORTABLE_LLVM_PREFIX
 if ( $?CC ) unsetenv CC
 if ( $?CXX ) unsetenv CXX
+if ( $?CPP ) unsetenv CPP
 if ( $?AR ) unsetenv AR
 if ( $?NM ) unsetenv NM
 if ( $?RANLIB ) unsetenv RANLIB
 if ( $?LD ) unsetenv LD
+if ( $?ARFLAGS ) unsetenv ARFLAGS
+if ( $?CPPFLAGS ) unsetenv CPPFLAGS
+if ( $?CFLAGS ) unsetenv CFLAGS
+if ( $?CXXFLAGS ) unsetenv CXXFLAGS
+if ( $?LDFLAGS ) unsetenv LDFLAGS
+if ( $?LDSHARED ) unsetenv LDSHARED
+if ( $?LDCXXSHARED ) unsetenv LDCXXSHARED
+if ( $?PORTABLE_CCACHE_BIN ) unsetenv PORTABLE_CCACHE_BIN
+if ( $?PORTABLE_CCACHE_DIR ) unsetenv PORTABLE_CCACHE_DIR
 
 echo "Python environment configured in current shell."
 echo "PORTABLE_PYTHON_PREFIX=$PORTABLE_PYTHON_PREFIX"
+echo "Compilation workflows such as numba.pycc require start_llvm_python.csh."
+rehash

@@ -1,13 +1,18 @@
 #!/bin/csh -f
 
-if ( $#argv != 0 && $#argv != 2 ) then
-  echo "Usage: source start_llvm_python.csh [llvm_prefix python_prefix]"
+if ( $#argv != 0 && $#argv != 2 && $#argv != 3 ) then
+  echo "Usage: source start_llvm_python.csh [llvm_prefix python_prefix [ccache_dir]]"
   exit 1
 endif
 
-if ( $#argv == 2 ) then
+set requested_ccache_dir = ""
+
+if ( $#argv == 2 || $#argv == 3 ) then
   set llvm_prefix = "$1"
   set python_prefix = "$2"
+  if ( $#argv == 3 ) then
+    set requested_ccache_dir = "$3"
+  endif
 else
   set llvm_prefix = "$cwd/portable-llvm"
   set python_prefix = "$cwd/portable-python314"
@@ -77,7 +82,57 @@ foreach binpath ( "$llvm_prefix"/bin/* )
   ln -sfn "$binpath" "$llvm_bin/$base"
 end
 
-setenv PATH "$python_prefix/bin:${llvm_bin}:$PORTABLE_ORIG_PATH"
+set ccache_bin = ""
+set ccache_wrap_bin = ""
+if ( -x "$llvm_prefix/bin/ccache" ) then
+  set ccache_bin = "$llvm_prefix/bin/ccache"
+  set ccache_wrap_bin = "$llvm_prefix/.llvm-ccache-bin"
+  mkdir -p "$ccache_wrap_bin"
+  set ccache_dir = ""
+  if ( "$requested_ccache_dir" != "" ) then
+    set ccache_dir = "$requested_ccache_dir"
+  else if ( $?PORTABLE_CCACHE_DIR ) then
+    set ccache_dir = "$PORTABLE_CCACHE_DIR"
+  else if ( $?CCACHE_DIR ) then
+    set ccache_dir = "$CCACHE_DIR"
+  endif
+  if ( "$ccache_dir" == "" ) then
+    if ( $?HOME ) then
+      set ccache_dir = "$HOME/.cache/nx-offline-ccache"
+    else
+      set ccache_dir = "$cwd/.ccache"
+    endif
+  endif
+  if ( "$ccache_dir" == "" ) then
+    set ccache_dir = "$cwd/.ccache"
+  endif
+  mkdir -p "$ccache_dir"
+  if ( $status == 0 ) then
+    setenv CCACHE_DIR "$ccache_dir"
+    setenv PORTABLE_CCACHE_DIR "$ccache_dir"
+  else
+    echo "Warning: unable to create ccache directory: $ccache_dir"
+  endif
+  if ( ! $?CCACHE_COMPILERCHECK ) then
+    setenv CCACHE_COMPILERCHECK content
+  endif
+  setenv PORTABLE_CCACHE_BIN "$ccache_bin"
+  cat > "$ccache_wrap_bin/clang" << EOF
+#!/bin/sh
+exec "$ccache_bin" "$llvm_prefix/bin/clang" "\$@"
+EOF
+  cat > "$ccache_wrap_bin/clang++" << EOF
+#!/bin/sh
+exec "$ccache_bin" "$llvm_prefix/bin/clang++" "\$@"
+EOF
+  chmod +x "$ccache_wrap_bin/clang" "$ccache_wrap_bin/clang++"
+endif
+
+if ( "$ccache_wrap_bin" != "" ) then
+  setenv PATH "$python_prefix/bin:${ccache_wrap_bin}:${llvm_bin}:$PORTABLE_ORIG_PATH"
+else
+  setenv PATH "$python_prefix/bin:${llvm_bin}:$PORTABLE_ORIG_PATH"
+endif
 if ( "$PORTABLE_ORIG_LD_LIBRARY_PATH" == "__EMPTY__" ) then
   setenv LD_LIBRARY_PATH "$python_prefix/lib:$llvm_prefix/lib"
 else
@@ -127,12 +182,37 @@ if ( "$PORTABLE_ORIG_PKG_CONFIG_PATH" == "__EMPTY__" ) then
 else
   setenv PKG_CONFIG_PATH "$python_prefix/lib/pkgconfig:$llvm_prefix/lib/pkgconfig:$PORTABLE_ORIG_PKG_CONFIG_PATH"
 endif
-setenv CC "$llvm_prefix/bin/clang"
-setenv CXX "$llvm_prefix/bin/clang++"
+if ( $?CPPFLAGS ) then
+  setenv CPPFLAGS "-I$python_prefix/include -I$llvm_prefix/include $CPPFLAGS"
+else
+  setenv CPPFLAGS "-I$python_prefix/include -I$llvm_prefix/include"
+endif
+if ( $?LDFLAGS ) then
+  setenv LDFLAGS "-L$python_prefix/lib -Wl,-rpath,$python_prefix/lib -L$llvm_prefix/lib -Wl,-rpath,$llvm_prefix/lib -fuse-ld=lld $LDFLAGS"
+else
+  setenv LDFLAGS "-L$python_prefix/lib -Wl,-rpath,$python_prefix/lib -L$llvm_prefix/lib -Wl,-rpath,$llvm_prefix/lib -fuse-ld=lld"
+endif
+if ( ! $?CFLAGS ) then
+  setenv CFLAGS "-O3 -fPIC"
+endif
+if ( ! $?CXXFLAGS ) then
+  setenv CXXFLAGS "-O3 -fPIC"
+endif
+if ( "$ccache_bin" != "" ) then
+  setenv CC "$ccache_wrap_bin/clang"
+  setenv CXX "$ccache_wrap_bin/clang++"
+else
+  setenv CC "$llvm_prefix/bin/clang"
+  setenv CXX "$llvm_prefix/bin/clang++"
+endif
+setenv CPP "$llvm_prefix/bin/clang -E"
 setenv AR "$llvm_prefix/bin/llvm-ar"
 setenv NM "$llvm_prefix/bin/llvm-nm"
 setenv RANLIB "$llvm_prefix/bin/llvm-ranlib"
 setenv LD "$llvm_prefix/bin/ld.lld"
+setenv ARFLAGS "rcs"
+setenv LDSHARED "$llvm_prefix/bin/clang -shared"
+setenv LDCXXSHARED "$llvm_prefix/bin/clang++ -shared"
 setenv PORTABLE_LLVM_PREFIX "$llvm_prefix"
 setenv PORTABLE_PYTHON_PREFIX "$python_prefix"
 setenv PORTABLE_ENV_MODE "llvm+python"
@@ -140,3 +220,6 @@ setenv PORTABLE_ENV_MODE "llvm+python"
 echo "LLVM + Python environments configured in current shell."
 echo "PORTABLE_LLVM_PREFIX=$PORTABLE_LLVM_PREFIX"
 echo "PORTABLE_PYTHON_PREFIX=$PORTABLE_PYTHON_PREFIX"
+if ( $?PORTABLE_CCACHE_DIR ) echo "PORTABLE_CCACHE_DIR=$PORTABLE_CCACHE_DIR"
+echo "Use this mode for Python extension builds and numba.pycc."
+rehash

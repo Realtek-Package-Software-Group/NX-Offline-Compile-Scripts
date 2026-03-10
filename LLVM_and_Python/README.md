@@ -35,6 +35,16 @@
 PYTHON_VERSION=3.14.3 LLVM_ENV_NAME=llvm-toolchain PY_ENV_NAME=python314-opt ./scripts/build_portable_python314_llvm.sh
 ```
 
+若 Docker Hub 網路不穩，build 腳本會先重試拉取 base image。可額外覆蓋：
+```bash
+BASE_IMAGE=rockylinux:8.8 DOCKER_RETRY_COUNT=5 DOCKER_RETRY_DELAY_SEC=10 ./scripts/build_portable_python314_llvm.sh
+```
+
+若公司內部有 registry mirror，也可改用自訂 base image：
+```bash
+BASE_IMAGE=my-registry.example.com/library/rockylinux:8.8 ./scripts/build_portable_python314_llvm.sh
+```
+
 完成後產物在 `artifacts/`：
 - `${LLVM_ENV_NAME}-rhel8.8.tar.gz`
 - `${LLVM_ENV_NAME}-rhel8.8.tar.gz.sha256`
@@ -81,6 +91,12 @@ cd /project/PACKAGE/package/tools/toolchains
 source ./start_llvm_only.csh /opt/portable-llvm
 clang --version
 ```
+若要指定 `ccache` 目錄：
+```csh
+source ./start_llvm_only.csh /opt/portable-llvm /project/cache/ccache
+echo $CCACHE_DIR
+ccache -s
+```
 若不帶參數，預設使用目前目錄下 `./portable-llvm`：
 ```csh
 source ./start_llvm_only.csh
@@ -92,6 +108,8 @@ source ./start_python_only.csh /opt/portable-python314
 python3.14 -V
 python3.14 -c "import sys; print(sys.version)"
 ```
+此模式只適合執行 Python，不會保留 `CC`、`CXX`、`LDFLAGS` 等編譯環境變數。
+
 若不帶參數，預設使用目前目錄下 `./portable-python314`：
 ```csh
 source ./start_python_only.csh
@@ -103,12 +121,54 @@ source ./start_llvm_python.csh /opt/portable-llvm /opt/portable-python314
 python3.14 -c "import sys; print(sys.version)"
 clang --version
 ```
+若要指定 `ccache` 目錄：
+```csh
+source ./start_llvm_python.csh /opt/portable-llvm /opt/portable-python314 /project/cache/ccache
+echo $CCACHE_DIR
+ccache -s
+```
 若不帶參數，預設使用目前目錄下 `./portable-llvm` 與 `./portable-python314`：
 ```csh
 source ./start_llvm_python.csh
 ```
 
-## 4) 單獨離線模擬驗證（本機 Docker）
+`ccache` 目錄優先順序如下：
+1. `start_llvm_only.csh` / `start_llvm_python.csh` 的最後一個參數
+2. `PORTABLE_CCACHE_DIR`
+3. `CCACHE_DIR`
+4. 預設值 `$HOME/.cache/nx-offline-ccache`
+
+只要是會編譯 extension 的流程，例如 `numba.pycc`、`setuptools build_ext`、`Nuitka`，都應該使用 `start_llvm_python.csh`，不要用 `start_python_only.csh`。
+
+## 4) venv + Nuitka / extension build
+推薦順序是先設定 `LLVM + Python`，再啟用 venv，這樣 `python` 會指向 venv，同時仍保留 `clang` / `ccache` 編譯環境：
+
+```csh
+source /opt/start_llvm_python.csh /opt/portable-llvm /opt/portable-python314 /project/cache/ccache
+python3.14 -m venv /project/myenv
+source /project/myenv/bin/activate.csh
+
+which python
+echo $CC
+echo $CCACHE_DIR
+ccache -s
+
+python -m nuitka --module your_module.py
+```
+
+如果 venv 已經存在，之後每次開新 shell 的順序仍然相同：
+```csh
+source /opt/start_llvm_python.csh /opt/portable-llvm /opt/portable-python314 /project/cache/ccache
+source /project/myenv/bin/activate.csh
+```
+
+若只是執行既有 Python 程式、不做任何編譯，可以改用：
+```csh
+source /opt/start_python_only.csh /opt/portable-python314
+source /project/myenv/bin/activate.csh
+```
+
+## 5) 單獨離線模擬驗證（本機 Docker）
 ```bash
 ./scripts/verify_offline_bundle.sh \
   artifacts/llvm-toolchain-rhel8.8.tar.gz \
@@ -119,4 +179,5 @@ source ./start_llvm_python.csh
 - Python configure flags 是否包含 3 個優化選項
 - LLVM 主要工具是否存在可執行
 - 三個 `csh` 環境設定腳本是否可成功設定環境
+- `start_llvm_only.csh` / `start_llvm_python.csh` 是否可正確套用自訂 `ccache` 目錄
 - 以可攜 Python 建立的 venv 在未先 source start 腳本時仍可啟動

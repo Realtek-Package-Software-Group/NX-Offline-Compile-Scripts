@@ -1,4 +1,5 @@
-FROM rockylinux:8.8
+ARG BASE_IMAGE=rockylinux:8.8
+FROM ${BASE_IMAGE}
 
 RUN dnf -y update && \
     dnf -y install \

@@ -48,6 +48,7 @@ ensure_env_packages() {
 }
 
 llvm_base_pkgs=(
+  ccache
   clang
   clangxx
   llvm
@@ -93,10 +94,36 @@ python_base_pkgs=(
   zstd
 )
 
-echo "[1/10] Creating/updating LLVM environment: ${LLVM_ENV_NAME}"
+python_qt_x11_runtime_pkgs=(
+  libxcb
+  libxkbcommon
+  xkeyboard-config
+  xcb-util
+  xcb-util-cursor
+  xcb-util-image
+  xcb-util-keysyms
+  xcb-util-renderutil
+  xcb-util-wm
+  xorg-libice
+  xorg-libsm
+  xorg-libx11
+  xorg-libxau
+  xorg-libxcomposite
+  xorg-libxcursor
+  xorg-libxdamage
+  xorg-libxdmcp
+  xorg-libxext
+  xorg-libxfixes
+  xorg-libxi
+  xorg-libxinerama
+  xorg-libxrandr
+  xorg-libxrender
+)
+
+echo "[1/12] Creating/updating LLVM environment: ${LLVM_ENV_NAME}"
 ensure_env_packages "${LLVM_ENV_NAME}" "${llvm_base_pkgs[@]}"
 
-echo "[2/10] Installing optional LLVM packages when available"
+echo "[2/12] Installing optional LLVM packages when available"
 for pkg in "${llvm_optional_pkgs[@]}"; do
   if micromamba install -y -n "${LLVM_ENV_NAME}" -c conda-forge "${pkg}" >/tmp/micromamba-${pkg}.log 2>&1; then
     echo "  - installed ${pkg}"
@@ -105,28 +132,29 @@ for pkg in "${llvm_optional_pkgs[@]}"; do
   fi
 done
 
-echo "[3/10] Creating/updating Python runtime environment: ${PY_ENV_NAME}"
-ensure_env_packages "${PY_ENV_NAME}" "${python_base_pkgs[@]}"
+echo "[3/12] Creating/updating Python runtime environment: ${PY_ENV_NAME}"
+ensure_env_packages "${PY_ENV_NAME}" "${python_base_pkgs[@]}" "${python_qt_x11_runtime_pkgs[@]}"
 
 eval "$(micromamba shell hook -s bash)"
 micromamba activate "${LLVM_ENV_NAME}"
 
-echo "[4/10] Downloading Python ${PYTHON_VERSION} source"
+echo "[4/12] Downloading Python ${PYTHON_VERSION} source"
 rm -rf "${PYTHON_SRC_DIR}" "${BUILD_DIR}/${PYTHON_TARBALL}"
 curl -fL "${PYTHON_URL}" -o "${BUILD_DIR}/${PYTHON_TARBALL}"
 tar -xJf "${BUILD_DIR}/${PYTHON_TARBALL}" -C "${BUILD_DIR}"
 
 pushd "${PYTHON_SRC_DIR}" >/dev/null
 
-echo "[5/10] Configuring CPython against separate Python prefix"
+echo "[5/12] Configuring CPython against separate Python prefix"
 export PATH="${LLVM_ENV_PREFIX}/bin:${PY_ENV_PREFIX}/bin:${PATH}"
-export CC="${LLVM_ENV_PREFIX}/bin/clang"
-export CXX="${LLVM_ENV_PREFIX}/bin/clang++"
-export AR="${LLVM_ENV_PREFIX}/bin/llvm-ar"
-export NM="${LLVM_ENV_PREFIX}/bin/llvm-nm"
-export RANLIB="${LLVM_ENV_PREFIX}/bin/llvm-ranlib"
-export LD="${LLVM_ENV_PREFIX}/bin/ld.lld"
-export LLVM_PROFDATA="${LLVM_ENV_PREFIX}/bin/llvm-profdata"
+# Keep tool names relocatable so sysconfig does not hard-code the build container path.
+export CC="clang"
+export CXX="clang++"
+export AR="llvm-ar"
+export NM="llvm-nm"
+export RANLIB="llvm-ranlib"
+export LD="ld.lld"
+export LLVM_PROFDATA="llvm-profdata"
 export CPPFLAGS="-I${PY_ENV_PREFIX}/include"
 export CFLAGS="-O3 -fPIC"
 export CXXFLAGS="-O3 -fPIC"
@@ -143,7 +171,7 @@ export PKG_CONFIG_PATH="${PY_ENV_PREFIX}/lib/pkgconfig:${LLVM_ENV_PREFIX}/lib/pk
   --enable-shared \
   --with-ensurepip=install
 
-echo "[6/10] Building and installing CPython (PGO + ThinLTO)"
+echo "[6/12] Building and installing CPython (PGO + ThinLTO)"
 make -j"$(nproc)"
 make install
 
@@ -156,14 +184,22 @@ fi
 ln -sfn python3.14 "${PY_ENV_PREFIX}/bin/python3"
 ln -sfn python3 "${PY_ENV_PREFIX}/bin/python"
 
-echo "[7/10] Normalizing Python RUNPATH for portable venv usage"
+LD_LIBRARY_PATH="${PY_ENV_PREFIX}/lib:${LLVM_ENV_PREFIX}/lib:${LD_LIBRARY_PATH:-}" \
+"${PY_ENV_PREFIX}/bin/python3.14" -m ensurepip --upgrade --default-pip
+if [[ -x "${PY_ENV_PREFIX}/bin/pip3" && ! -e "${PY_ENV_PREFIX}/bin/pip" ]]; then
+  ln -sfn pip3 "${PY_ENV_PREFIX}/bin/pip"
+elif [[ -x "${PY_ENV_PREFIX}/bin/pip3.14" && ! -e "${PY_ENV_PREFIX}/bin/pip" ]]; then
+  ln -sfn pip3.14 "${PY_ENV_PREFIX}/bin/pip"
+fi
+
+echo "[7/12] Normalizing Python RUNPATH for portable venv usage"
 if [[ -x "${LLVM_ENV_PREFIX}/bin/patchelf" ]]; then
   "${LLVM_ENV_PREFIX}/bin/patchelf" --set-rpath '$ORIGIN/../lib' "${PY_ENV_PREFIX}/bin/python3.14"
 else
   echo "Warning: patchelf not available; python3.14 RUNPATH left as-is"
 fi
 
-echo "[8/10] Running build-time validation"
+echo "[8/12] Running build-time validation"
 LD_LIBRARY_PATH="${PY_ENV_PREFIX}/lib:${LLVM_ENV_PREFIX}/lib:${LD_LIBRARY_PATH:-}" \
 "${PY_ENV_PREFIX}/bin/python3.14" - <<'PY'
 import json
@@ -186,7 +222,32 @@ print(json.dumps({
 }, indent=2))
 PY
 
+echo "[9/12] Verifying bundled Qt/X11 runtime libraries for PyQt/PySide"
+required_qt_runtime_globs=(
+  "libX11.so*"
+  "libXcursor.so*"
+  "libXrender.so*"
+  "libXrandr.so*"
+  "libXi.so*"
+  "libxcb.so*"
+  "libxcb-cursor.so*"
+  "libxcb-icccm.so*"
+  "libxcb-image.so*"
+  "libxcb-keysyms.so*"
+  "libxcb-render-util.so*"
+  "libxcb-util.so*"
+  "libxkbcommon.so*"
+)
+
+for pattern in "${required_qt_runtime_globs[@]}"; do
+  if ! find "${PY_ENV_PREFIX}/lib" -maxdepth 1 -name "${pattern}" | grep -q .; then
+    echo "Missing Qt/X11 runtime library in Python bundle: ${pattern}" >&2
+    exit 1
+  fi
+done
+
 required_tools=(
+  ccache
   clang
   clang++
   ld.lld
@@ -221,19 +282,23 @@ done
 {
   echo "# Python Build Metadata"
   echo "python_env_name=${PY_ENV_NAME}"
+  echo "llvm_env_name=${LLVM_ENV_NAME}"
   echo "python_version=${PYTHON_VERSION}"
   echo "python_bin=bin/python3.14"
+  echo "python_build_prefix=${PY_ENV_PREFIX}"
+  echo "llvm_build_prefix=${LLVM_ENV_PREFIX}"
 } > "${ARTIFACT_DIR}/python-build-metadata.txt"
 
-echo "[9/10] Packing LLVM environment"
+echo "[10/12] Packing LLVM environment"
 rm -f "${LLVM_BUNDLE_PATH}"
 conda-pack -p "${LLVM_ENV_PREFIX}" -o "${LLVM_BUNDLE_PATH}"
 
-echo "[10/10] Packing Python environment"
+echo "[11/12] Packing Python environment"
 rm -f "${PY_BUNDLE_PATH}"
 conda-pack -p "${PY_ENV_PREFIX}" -o "${PY_BUNDLE_PATH}"
 
 cp "${WORK_DIR}/scripts/offline/install_portable_envs.csh" "${ARTIFACT_DIR}/install_portable_envs.csh"
+cp "${WORK_DIR}/scripts/offline/repair_python_sysconfig.py" "${ARTIFACT_DIR}/repair_python_sysconfig.py"
 cp "${WORK_DIR}/scripts/offline/start_llvm_only.csh" "${ARTIFACT_DIR}/start_llvm_only.csh"
 cp "${WORK_DIR}/scripts/offline/start_python_only.csh" "${ARTIFACT_DIR}/start_python_only.csh"
 cp "${WORK_DIR}/scripts/offline/start_llvm_python.csh" "${ARTIFACT_DIR}/start_llvm_python.csh"
@@ -245,6 +310,7 @@ rm -f \
   "${ARTIFACT_DIR}/portable-python-bin.txt"
 chmod +x \
   "${ARTIFACT_DIR}/install_portable_envs.csh" \
+  "${ARTIFACT_DIR}/repair_python_sysconfig.py" \
   "${ARTIFACT_DIR}/start_llvm_only.csh" \
   "${ARTIFACT_DIR}/start_python_only.csh" \
   "${ARTIFACT_DIR}/start_llvm_python.csh"
@@ -255,7 +321,7 @@ chmod +x \
   sha256sum "${PY_BUNDLE_NAME}" > "${PY_BUNDLE_NAME}.sha256"
 )
 
-echo "[11/11] Build complete"
+echo "[12/12] Build complete"
 echo "LLVM bundle: ${LLVM_BUNDLE_PATH}"
 echo "Python bundle: ${PY_BUNDLE_PATH}"
 echo "LLVM checksum: ${LLVM_BUNDLE_PATH}.sha256"
