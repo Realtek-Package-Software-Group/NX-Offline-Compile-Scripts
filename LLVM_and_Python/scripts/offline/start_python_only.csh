@@ -59,12 +59,17 @@ else
   setenv LD_LIBRARY_PATH "$python_prefix/lib:$PORTABLE_ORIG_LD_LIBRARY_PATH"
 endif
 
-if ( -x "$python_prefix/bin/conda-unpack" && ! -e "$python_prefix/.conda_unpacked" ) then
-  "$python_prefix/bin/conda-unpack"
-  if ( $status != 0 ) then
-    exit $status
+if ( -x "$python_prefix/bin/conda-unpack" ) then
+  if ( -e "$python_prefix/.conda_unpacked" ) then
+  else if ( -w "$python_prefix" ) then
+    "$python_prefix/bin/conda-unpack"
+    if ( $status != 0 ) then
+      exit $status
+    endif
+    touch "$python_prefix/.conda_unpacked"
+  else
+    echo "Warning: skipping python conda-unpack because prefix is not writable: $python_prefix"
   endif
-  touch "$python_prefix/.conda_unpacked"
 endif
 
 set py_bin = "$python_prefix/bin/python3.14"
